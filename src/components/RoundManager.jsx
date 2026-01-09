@@ -9,9 +9,7 @@ export default function RoundManager({ gameId, isAdmin = false }) {
   const [error, setError] = useState('')
   const [timeRemaining, setTimeRemaining] = useState(0)
   const [advancing, setAdvancing] = useState(false)
-  const [autoAdvancing, setAutoAdvancing] = useState(false)
   const countdownIntervalRef = useRef(null)
-  const autoAdvanceTimeoutRef = useRef(null)
 
   useEffect(() => {
     loadGameData()
@@ -40,27 +38,16 @@ export default function RoundManager({ gameId, isAdmin = false }) {
       }
     }
 
-    const clearAutoAdvanceTimeout = () => {
-      if (autoAdvanceTimeoutRef.current) {
-        clearTimeout(autoAdvanceTimeoutRef.current)
-        autoAdvanceTimeoutRef.current = null
-      }
-    }
-
     clearCountdown()
 
     if (!game || game.status !== 'live') {
-      setAutoAdvancing(false)
       setTimeRemaining(0)
-      clearAutoAdvanceTimeout()
       return
     }
 
     const currentRound = rounds.find(r => r.round_number === game.current_round_number)
     if (!currentRound || currentRound.status !== 'active') {
-      setAutoAdvancing(false)
       setTimeRemaining(0)
-      clearAutoAdvanceTimeout()
       return
     }
 
@@ -80,38 +67,10 @@ export default function RoundManager({ gameId, isAdmin = false }) {
       return Math.floor(remaining / 1000)
     }
 
-    const triggerAutoAdvance = () => {
-      if (!isAdmin) return
-
-      if (autoAdvanceTimeoutRef.current) return
-
-      setAutoAdvancing(true)
-      autoAdvanceTimeoutRef.current = setTimeout(async () => {
-        try {
-          await gameApi.advanceToNextRound(gameId)
-        } catch (err) {
-          console.error('Error auto-advancing round:', err)
-          console.error('Full error details:', JSON.stringify(err, null, 2))
-          alert(`Failed to advance round: ${err.message || 'Unknown error'}`)
-          setAutoAdvancing(false)
-        } finally {
-          autoAdvanceTimeoutRef.current = null
-        }
-      }, 3000)
-    }
-
     const initialRemaining = calculateTimeRemaining()
     const safeInitialRemaining = Number.isFinite(initialRemaining) ? initialRemaining : 0
 
-    if (safeInitialRemaining > 0) {
-      setAutoAdvancing(false)
-    }
-
     setTimeRemaining(safeInitialRemaining)
-
-    if (!Number.isFinite(initialRemaining) || initialRemaining <= 0) {
-      triggerAutoAdvance()
-    }
 
     countdownIntervalRef.current = setInterval(() => {
       const remaining = calculateTimeRemaining()
@@ -120,13 +79,11 @@ export default function RoundManager({ gameId, isAdmin = false }) {
 
       if (!Number.isFinite(remaining) || remaining <= 0) {
         clearCountdown()
-        triggerAutoAdvance()
       }
     }, 1000)
 
     return () => {
       clearCountdown()
-      clearAutoAdvanceTimeout()
     }
   }, [game, rounds, gameId, isAdmin])
 
@@ -264,9 +221,9 @@ export default function RoundManager({ gameId, isAdmin = false }) {
           {isAdmin && canAdvance && (
             <button
               onClick={handleAdvanceRound}
-              disabled={advancing || isRoundActive}
+              disabled={advancing}
               className={`flex items-center gap-2 px-6 py-3 rounded-lg font-bold text-sm transition-all ${
-                isRoundActive
+                advancing
                   ? 'bg-white/5 text-white/40 cursor-not-allowed'
                   : 'bg-gradient-primary text-white hover:opacity-90'
               }`}
@@ -280,7 +237,7 @@ export default function RoundManager({ gameId, isAdmin = false }) {
         </div>
 
         {/* Live Timer */}
-        {isRoundActive && !autoAdvancing && (
+        {isRoundActive && (
           <div className="flex items-center justify-center gap-3 p-6 bg-black/20 rounded-lg border border-white/10">
             <span className="material-symbols-outlined text-3xl text-white/60">timer</span>
             <div className="text-center">
@@ -292,23 +249,8 @@ export default function RoundManager({ gameId, isAdmin = false }) {
           </div>
         )}
 
-        {/* Auto-advancing Message */}
-        {autoAdvancing && (
-          <div className="flex items-center justify-center gap-3 p-6 bg-[#FF00A8]/10 rounded-lg border border-[#FF00A8]/30">
-            <span className="material-symbols-outlined text-3xl text-[#FF00A8] animate-pulse">
-              fast_forward
-            </span>
-            <div className="text-center">
-              <div className="text-xl font-bold text-white">Round Complete!</div>
-              <div className="text-white/60 text-sm mt-1">
-                {isAdmin ? 'Advancing to next round in 3 seconds...' : 'Waiting for round to advance...'}
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Round Ended - Waiting for Admin */}
-        {!isRoundActive && !autoAdvancing && game.status === 'live' && timeRemaining === 0 && !isAdmin && (
+        {!isRoundActive && game.status === 'live' && timeRemaining === 0 && !isAdmin && (
           <div className="flex items-center justify-center gap-3 p-6 bg-yellow-500/10 rounded-lg border border-yellow-500/30">
             <span className="material-symbols-outlined text-3xl text-yellow-400">schedule</span>
             <div className="text-center">
@@ -320,7 +262,7 @@ export default function RoundManager({ gameId, isAdmin = false }) {
           </div>
         )}
 
-        {!isRoundActive && !autoAdvancing && game.status === 'live' && (timeRemaining !== 0 || isAdmin) && (
+        {!isRoundActive && game.status === 'live' && (timeRemaining !== 0 || isAdmin) && (
           <div className="flex items-center justify-center gap-3 p-6 bg-black/20 rounded-lg border border-white/10">
             <span className="material-symbols-outlined text-3xl text-yellow-400">schedule</span>
             <div className="text-center">
