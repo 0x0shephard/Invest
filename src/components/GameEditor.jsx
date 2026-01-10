@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { gameApi, auth } from '../lib/supabase'
+import { gameApi, auth, supabase } from '../lib/supabase'
 
 export default function GameEditor({ game = null, onClose, onSave }) {
   const [activeTab, setActiveTab] = useState('basic')
@@ -65,24 +65,25 @@ export default function GameEditor({ game = null, onClose, onSave }) {
   const loadGameData = async () => {
     if (!game?.id) return
     try {
-      const { data, error } = await gameApi.getGame(game.id)
-      if (error) throw error
+      // Load game details with stocks
+      const { data: gameData, error: gameError } = await gameApi.getGame(game.id)
+      if (gameError) throw gameError
 
-      setStocks(data.stocks || [])
+      setStocks(gameData.stocks || [])
 
       // Load round durations
       const durations = {}
-      data.rounds?.forEach(round => {
+      gameData.rounds?.forEach(round => {
         durations[round.round_number] = round.duration_minutes
       })
       setRoundDurations(durations)
 
-      // Load price matrix
+      // Load price matrix with actual prices
       const prices = {}
-      data.rounds?.forEach(round => {
-        prices[round.round_number] = []
-      })
-      // We'll load actual prices via getRoundPrices if needed
+      for (const round of gameData.rounds || []) {
+        const { data: roundPrices } = await gameApi.getRoundPrices(game.id, round.round_number)
+        prices[round.round_number] = roundPrices || []
+      }
       setPriceMatrix(prices)
     } catch (err) {
       console.error('Error loading game data:', err)
@@ -169,20 +170,27 @@ export default function GameEditor({ game = null, onClose, onSave }) {
     return priceObj?.price || stocks.find(s => s.symbol === symbol)?.initial_price || 0
   }
 
-  const handleSave = async () => {
+  const handleSave = async (shouldValidate = false) => {
     setLoading(true)
     setError('')
 
     try {
-      // Validation
-      if (!title.trim()) {
-        throw new Error('Please enter a game title')
-      }
-      if (stocks.length === 0) {
-        throw new Error('Please add at least one stock')
-      }
-      if (totalRounds < 1) {
-        throw new Error('Game must have at least one round')
+      // Validation (only if shouldValidate is true)
+      if (shouldValidate) {
+        if (!title.trim()) {
+          throw new Error('Please enter a game title')
+        }
+        if (stocks.length === 0) {
+          throw new Error('Please add at least one stock')
+        }
+        if (totalRounds < 1) {
+          throw new Error('Game must have at least one round')
+        }
+      } else {
+        // Minimal validation for draft
+        if (!title.trim()) {
+          throw new Error('Please enter a game title')
+        }
       }
 
       const { user } = await auth.getCurrentUser()
@@ -214,32 +222,62 @@ export default function GameEditor({ game = null, onClose, onSave }) {
         gameId = newGame.id
       }
 
-      // Add stocks (only for new games)
-      if (!game?.id) {
+      // Handle stocks - delete existing ones and add new ones for editing
+      if (game?.id) {
+        // Get existing stocks
+        const { data: existingStocks } = await gameApi.getStocks(gameId)
+
+        // Remove stocks that are no longer in the list
+        for (const existingStock of existingStocks || []) {
+          if (!stocks.find(s => s.symbol === existingStock.symbol)) {
+            await gameApi.removeStockFromGame(gameId, existingStock.symbol)
+          }
+        }
+
+        // Add new stocks
+        for (const stock of stocks) {
+          if (!existingStocks?.find(s => s.symbol === stock.symbol)) {
+            await gameApi.addStockToGame(gameId, stock)
+          }
+        }
+      } else {
+        // Add stocks for new games
         for (const stock of stocks) {
           await gameApi.addStockToGame(gameId, stock)
         }
       }
 
       // Create/update rounds
-      const roundsToCreate = []
-      for (let i = 1; i <= totalRounds; i++) {
-        roundsToCreate.push({
-          game_id: gameId,
-          round_number: i,
-          duration_minutes: roundDurations[i] || 10,
-          status: 'pending'
-        })
-      }
-      await gameApi.createRounds(roundsToCreate)
+      if (stocks.length > 0) {
+        // If editing, delete existing rounds first
+        if (game?.id) {
+          // Delete old rounds by deleting from round_prices and game_rounds
+          // The database should handle cascading deletes
+          await supabase
+            .from('game_rounds')
+            .delete()
+            .eq('game_id', gameId)
+        }
 
-      // Set round prices
-      for (let roundNum = 1; roundNum <= totalRounds; roundNum++) {
-        const prices = stocks.map(stock => ({
-          symbol: stock.symbol,
-          price: getPriceForRound(stock.symbol, roundNum)
-        }))
-        await gameApi.setRoundPrices(gameId, roundNum, prices)
+        const roundsToCreate = []
+        for (let i = 1; i <= totalRounds; i++) {
+          roundsToCreate.push({
+            game_id: gameId,
+            round_number: i,
+            duration_minutes: roundDurations[i] || 10,
+            status: 'pending'
+          })
+        }
+        await gameApi.createRounds(roundsToCreate)
+
+        // Set round prices
+        for (let roundNum = 1; roundNum <= totalRounds; roundNum++) {
+          const prices = stocks.map(stock => ({
+            symbol: stock.symbol,
+            price: getPriceForRound(stock.symbol, roundNum)
+          }))
+          await gameApi.setRoundPrices(gameId, roundNum, prices)
+        }
       }
 
       if (onSave) onSave()
@@ -560,20 +598,29 @@ export default function GameEditor({ game = null, onClose, onSave }) {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 p-6 border-t border-white/10">
+        <div className="flex items-center justify-between gap-3 p-6 border-t border-white/10">
           <button
             onClick={onClose}
             className="px-6 py-2 rounded-lg bg-white/10 text-white font-medium hover:bg-white/20 transition-colors"
           >
             Cancel
           </button>
-          <button
-            onClick={handleSave}
-            disabled={loading}
-            className="px-6 py-2 rounded-lg bg-gradient-primary text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
-          >
-            {loading ? 'Saving...' : 'Save Game'}
-          </button>
+          <div className="flex gap-3">
+            <button
+              onClick={() => handleSave(false)}
+              disabled={loading}
+              className="px-6 py-2 rounded-lg bg-white/10 text-white font-medium hover:bg-white/20 transition-colors disabled:opacity-50 border border-white/20"
+            >
+              {loading ? 'Saving...' : 'Save as Draft'}
+            </button>
+            <button
+              onClick={() => handleSave(true)}
+              disabled={loading}
+              className="px-6 py-2 rounded-lg bg-gradient-primary text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+            >
+              {loading ? 'Saving...' : 'Save & Complete'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

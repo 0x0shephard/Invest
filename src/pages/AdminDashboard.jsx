@@ -8,6 +8,7 @@ export default function AdminDashboard({ profile, onLogout }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showCreateGame, setShowCreateGame] = useState(false)
+  const [editingGame, setEditingGame] = useState(null)
   const [selectedGameId, setSelectedGameId] = useState(null)
 
   useEffect(() => {
@@ -222,7 +223,7 @@ export default function AdminDashboard({ profile, onLogout }) {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation()
-                                // TODO: Open edit modal
+                                setEditingGame(game)
                               }}
                               className="flex-1 py-2 px-3 rounded-lg bg-white/10 text-white text-xs font-medium hover:bg-white/20 transition-colors"
                             >
@@ -285,11 +286,16 @@ export default function AdminDashboard({ profile, onLogout }) {
       </div>
 
       {/* Game Editor Modal */}
-      {showCreateGame && (
+      {(showCreateGame || editingGame) && (
         <GameEditor
-          onClose={() => setShowCreateGame(false)}
+          game={editingGame}
+          onClose={() => {
+            setShowCreateGame(false)
+            setEditingGame(null)
+          }}
           onSave={() => {
             setShowCreateGame(false)
+            setEditingGame(null)
             loadGames()
           }}
         />
